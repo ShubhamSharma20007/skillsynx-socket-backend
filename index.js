@@ -7,6 +7,7 @@ import { connectToDatabase } from './db.js';
 import OpenAI from "openai"
 import userModel from "./models/user-model.js"
 import aiChatModel from "./models/ai-chat-model.js";
+import mongoose from "mongoose";
 const PORT = 4000
 const FRONTEND_URL = process.env.FRONTEND_URL ||  "https://skillsynx.vercel.app";
 
@@ -141,8 +142,8 @@ io.on('connection', async (socket) => {
       await storeChats({ role: 'user', content: msg, userId });
       
       // Read project data
-      const file = fs.readFileSync('./project.json', 'utf8');
-      const rawData = JSON.parse(file);
+      // const file = fs.readFileSync('./project.json', 'utf8');
+      // const rawData = JSON.parse(file);
       
       // Send system message to assistant
       await aiModel.beta.threads.messages.create(thread, {
