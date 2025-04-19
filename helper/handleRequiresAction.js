@@ -3,7 +3,7 @@ dotenv.config();
 import OpenAI from "openai";
 import { promises as fsPromises } from "fs";
 import { storeChats } from "../index.js";
-
+import { instructions } from "../data/prompt.js";
 export const aiModel = new OpenAI({
   apiKey: process.env.OPEN_API,
 });
@@ -11,24 +11,18 @@ export const aiModel = new OpenAI({
 const getFileResponse = async (input) => {
   try {
     // Adjust the file path as needed.
-    const instructions = await fsPromises.readFile('./project.txt', 'utf-8');
+    // const instructions = await fsPromises.readFile('./project.txt', 'utf-8');
     const response = await aiModel.responses.create({
       model: "gpt-4o-mini",
       max_output_tokens:1000,
       temperature: 0.5,
-      instructions:`
-      <user_query>
-    ${input}
+      instructions:instructions,
+      input:`
+        <user_query>
+        ${input}
       </user_query>
-
-    ${instructions}
-      `,
-      response_format:{
-        "point1": "string",
-        "point2": "string",
-        "point3": "string",
-        
-      },
+      `
+     
 
     });
     const output = response.output_text
@@ -66,7 +60,8 @@ const  submitToolOutputs =async(toolOutputs, runId, threadId, socket, io, userId
                   stream.on('toolCallDone', async () => {
                     io.to(socket.id).emit('stream_complete', {
                       content: fullResponse,
-                      role: 'assistant'
+                      role: 'assistant',
+                      stream: false,
                     });
                   });
               
@@ -75,7 +70,8 @@ const  submitToolOutputs =async(toolOutputs, runId, threadId, socket, io, userId
                     console.log("Stream ended:", fullResponse);
                     io.to(socket.id).emit('stream_complete', {
                       content: fullResponse,
-                      role: 'assistant'
+                      role: 'assistant',
+                      stream: true,
                     });
                     await storeChats({ role: 'assistant', content: fullResponse, userId });
                   });
@@ -99,6 +95,7 @@ export const handleRequiresAction = async (data, runId, threadId, socket, io, us
       data.required_action.submit_tool_outputs.tool_calls.map(async (toolCall) => {
         if (toolCall.function.name === 'get_file_data') {
           const args = JSON.parse(toolCall.function.arguments);
+          console.log("Arguments:", args);
           const input = args.input;
           const output = await getFileResponse(input);
           return {

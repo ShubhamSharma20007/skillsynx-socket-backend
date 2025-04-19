@@ -239,7 +239,8 @@ io.on('connection', async (socket) => {
       stream.on('end', async () => {
         io.to(socket.id).emit('stream_complete', {
           content: fullResponse,
-          role: 'assistant'
+          role: 'assistant',
+          stream: false,
         });
         await storeChats({ role: 'assistant', content: fullResponse, userId });
       });
@@ -255,6 +256,11 @@ io.on('connection', async (socket) => {
         console.log("Event:", event);
         console.log("--------------------- Function Call ---------------------")
         if(event.event === 'thread.run.requires_action'){
+          io.to(socket.id).emit('chat_response', {
+            content: fullResponse,
+            role: 'assistant',
+            stream: true,
+          });
         await handleRequiresAction(event.data,event.data.id,event.data.thread_id,socket, io, socket.currentUserId) 
         
         
