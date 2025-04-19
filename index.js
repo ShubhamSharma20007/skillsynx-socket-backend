@@ -64,7 +64,7 @@ export const createThread = async () => {
         };
       } else {
         const threadId = await createThread();
-  
+    
         await userModel.updateOne(
           { clerkUserId: user },
           { threadId }
@@ -111,96 +111,89 @@ const io = new Server(httpServer, {
 });
 
 // Thread management
-let threadMap = new Map();
 
 io.on('connection', async (socket) => {
   console.log('Client connected:', socket.id);
 
-  socket.on('chat_message', async ({msg, user}) => {
+  socket.on('chat_message', async ({ msg, user }) => {
     try {
       const userDets = await getThreadId(user);
-      if (userDets !== false) {
-        if (
-          !threadMap.has('threadId') ||
-          !threadMap.has('current_user') ||
-          !threadMap.has('current_user_id')
-        ) {
-          threadMap.set('threadId', userDets.threadId);
-          threadMap.set('current_user', userDets.name);
-          threadMap.set('current_user_id', userDets.userId);
-        }
+      console.log('userDets', userDets);
+  
+      if (!userDets) {
+        socket.emit('error', { message: 'Failed to retrieve user details' });
+        return;
       }
-      
-      const thread = threadMap.get('threadId');
-      const userId = threadMap.get('current_user_id'); 
+  
+      socket.threadId = userDets.threadId;
+      socket.currentUser = userDets.name;
+      socket.currentUserId = userDets.userId;
+  
+      const thread = socket.threadId;
+      const userId = socket.currentUserId;
+  
       if (!thread) {
-        console.error("Thread ID not found");
         socket.emit('error', { message: 'Thread ID not found' });
         return;
       }
-
+  
       await storeChats({ role: 'user', content: msg, userId });
-      
-      // Read project data
-      // const file = fs.readFileSync('./project.json', 'utf8');
-      // const rawData = JSON.parse(file);
-      
-      // Send system message to assistant
+  
+  
       await aiModel.beta.threads.messages.create(thread, {
         role: 'assistant',
         content: `You are a helpful AI assistant for user query. 
-        - ${threadMap.get('current_user') ? 'The current user is ' + threadMap.get('current_user') + '.' : ''} 
-        - Do not generate code. 
-        - You must be mentioned of username in initial first message.
-        - Mention the user's name no more than twice.`
+          - ${socket.currentUser ? 'The current user is ' + socket.currentUser + '.' : ''} 
+          - You are not code generator. 
+          - You must be mentioned of username in initial first message.
+          - Mention the user's name no more than twice.`
       });
-
+  
       // Send user message to assistant
       await aiModel.beta.threads.messages.create(thread, {
         role: 'user',
         content: msg
       });
-
+  
       let fullResponse = '';
-
-      // Stream the response
       const stream = await aiModel.beta.threads.runs.stream(thread, {
-        assistant_id: process.env.ASSISTANT_ID, // Note: removed NEXT_PUBLIC_ prefix
+        assistant_id: process.env.ASSISTANT_ID,
         stream: true,
       });
-
+  
       stream.on('textDelta', (textDelta) => {
         if (textDelta.value) {
           fullResponse += textDelta.value;
-          socket.emit('chat_response', {
+          io.to(socket.id).emit('chat_response', {
             content: textDelta.value,
             stream: true,
             role: 'assistant'
           });
         }
       });
-
-      stream.on('toolCallDone', async() => {
-        socket.emit('stream_complete', {
+  
+      stream.on('toolCallDone', async () => {
+        io.to(socket.id).emit('stream_complete', {
           content: fullResponse,
           role: 'assistant'
         });
       });
-
-      stream.on('end', async() => {
-        socket.emit('stream_complete', {
+  
+      stream.on('end', async () => {
+        io.to(socket.id).emit('stream_complete', {
           content: fullResponse,
           role: 'assistant'
         });
         await storeChats({ role: 'assistant', content: fullResponse, userId });
       });
-
+  
       stream.on('error', (error) => {
         console.error("Stream error:", error);
         socket.emit('error', {
           message: 'An error occurred with the AI response'
         });
       });
+  
     } catch (error) {
       console.error("Error processing message:", error);
       socket.emit('error', {
@@ -208,6 +201,7 @@ io.on('connection', async (socket) => {
       });
     }
   });
+  
 
   socket.on('disconnect', () => {
     console.log('Client disconnected:', socket.id);
