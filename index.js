@@ -8,6 +8,7 @@ import OpenAI from "openai"
 import userModel from "./models/user-model.js"
 import aiChatModel from "./models/ai-chat-model.js";
 import mongoose from "mongoose";
+import { handleRequiresAction } from "./helper/handleRequiresAction.js";
 const PORT = 4000
 const FRONTEND_URL = process.env.FRONTEND_URL ||  "https://skillsynx.vercel.app";
 
@@ -15,6 +16,7 @@ export const aiModel = new OpenAI({
     apiKey: process.env.OPEN_API,
 });
 
+// store chats in database
 export const storeChats = async ({ role, content, userId }) => {
 
       let user;
@@ -40,6 +42,9 @@ export const storeChats = async ({ role, content, userId }) => {
         throw new Error(error.message || error);
       }
     };
+  
+// create thread for user
+
 export const createThread = async () => {
     try {
       const thread = await aiModel.beta.threads.create();
@@ -49,6 +54,8 @@ export const createThread = async () => {
       return false;
     }
   };
+
+//  get thread id
 
  const getThreadId = async (user) => {
     try {
@@ -87,6 +94,8 @@ export const createThread = async () => {
     }
   };
 
+
+
   
 
 const httpServer = createServer((req, res) => {
@@ -101,10 +110,10 @@ const httpServer = createServer((req, res) => {
   res.end('Not found');
 });
 
-// Set up Socket.IO with proper CORS for production
+
 const io = new Server(httpServer, {
   cors: {
-    origin: FRONTEND_URL ? [FRONTEND_URL] : "*", // Replace with your frontend URL in production
+    origin: FRONTEND_URL ? [FRONTEND_URL] : "*", 
     methods: ["GET", "POST"],
     credentials: true,
   }
@@ -131,7 +140,22 @@ io.on('connection', async (socket) => {
   
       const thread = socket.threadId;
       const userId = socket.currentUserId;
-  
+      
+      // check the thread status  
+      const activeRuns = await aiModel.beta.threads.runs.list(thread);
+      const runInProgress = activeRuns.data.find(run => {
+          return ['in_progress', 'queued', 'requires_action'].includes(run.status)
+      }
+      );
+      try {
+        if (runInProgress) {
+          await aiModel.beta.threads.runs.cancel(thread, runInProgress.id);
+          await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+      } catch (error) {
+       console.error("Error cancelling run:", error); 
+      }
+
       if (!thread) {
         socket.emit('error', { message: 'Thread ID not found' });
         return;
@@ -139,28 +163,60 @@ io.on('connection', async (socket) => {
   
       await storeChats({ role: 'user', content: msg, userId });
   
+      // const file = await aiModel.files.create({
+      //   file: fs.createReadStream('./product.txt'),
+      //   purpose: 'assistants',
+      // })
   
       await aiModel.beta.threads.messages.create(thread, {
         role: 'assistant',
-        content: `You are a helpful AI assistant for user query. 
+        content: `You are a helpful AI assistant this Project which is name of **SkillSynx Ai**. 
           - ${socket.currentUser ? 'The current user is ' + socket.currentUser + '.' : ''} 
           - You are not code generator. 
           - You must be mentioned of username in initial first message.
-          - Mention the user's name no more than twice.`
+          - Mention the user's name no more than twice in a same thread.`
       });
   
       // Send user message to assistant
       await aiModel.beta.threads.messages.create(thread, {
         role: 'user',
-        content: msg
+        content: msg,
       });
   
       let fullResponse = '';
+
+      
       const stream = await aiModel.beta.threads.runs.stream(thread, {
         assistant_id: process.env.ASSISTANT_ID,
         stream: true,
+        tools:[
+          {
+            type:'function',
+            function:{
+              name: 'get_file_data',
+              description: 'get the information of  skillsynx project',
+              parameters:{
+                type:'object',
+                properties:{
+                    input:{
+                      type:'string',
+                      description:'if the user ask about the project, then you can use this file',
+                      example:'what is the skillsynx project',
+                      file_name:'project.txt',
+                      file_type:'text/plain',
+                      file_location:fs.readFileSync('./project.txt','utf8'),
+                    },
+                    
+                },
+                required:['input']
+              }
+            }
+          }
+        ]
       });
-  
+
+   
+     
       stream.on('textDelta', (textDelta) => {
         if (textDelta.value) {
           fullResponse += textDelta.value;
@@ -171,6 +227,7 @@ io.on('connection', async (socket) => {
           });
         }
       });
+
   
       stream.on('toolCallDone', async () => {
         io.to(socket.id).emit('stream_complete', {
@@ -193,6 +250,16 @@ io.on('connection', async (socket) => {
           message: 'An error occurred with the AI response'
         });
       });
+   
+      for await(const event  of stream){
+        console.log("Event:", event);
+        console.log("--------------------- Function Call ---------------------")
+        if(event.event === 'thread.run.requires_action'){
+        await handleRequiresAction(event.data,event.data.id,event.data.thread_id,socket, io, socket.currentUserId) 
+        
+        
+        }
+      }
   
     } catch (error) {
       console.error("Error processing message:", error);
