@@ -90,7 +90,13 @@ export const handleRequiresAction = async (data, runId, threadId, socket, io, us
     if (!data?.required_action?.submit_tool_outputs?.tool_calls) {
       throw new Error("Invalid data structure in handleRequiresAction");
     }
-
+    io.to(socket.id).emit('chat_response', {
+      content: '',
+      stream: true,
+      role: 'assistant',
+      functionCall: true
+    });
+    
     const toolOutputs = await Promise.all(
       data.required_action.submit_tool_outputs.tool_calls.map(async (toolCall) => {
         if (toolCall.function.name === 'get_file_data') {
