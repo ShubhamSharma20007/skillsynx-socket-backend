@@ -56,46 +56,50 @@ export const createThread = async () => {
   };
 
 //  get thread id
+const getThreadId = async (user) => {
+  try {
+    let findUser = await userModel.findOne({ clerkUserId: user }, { name: 1, threadId: 1 });
 
- const getThreadId = async (user) => {
-    try {
-      let findUser = await userModel.findOne(
-        { clerkUserId: user },
-        { name: 1, threadId: 1}
-      );
-      if (findUser?.threadId) {
-        return {
-          name: findUser.name,
-          threadId: findUser.threadId,
-          userId: findUser._id,
-        };
-      } else {
-        const threadId = await createThread();
-    
-        await userModel.updateOne(
-          { clerkUserId: user },
-          { threadId }
-        );
-  
-        const updatedUser = await userModel.findOne(
-          { clerkUserId: user },
-          { name: 1, threadId: 1 }
-        );
-  
-        return {
-          name: updatedUser?.name,
-          threadId,
-          userId: updatedUser?._id,
-        };
+    let threadId = findUser?.threadId;
+
+    if (threadId) {
+      try {
+        await aiModel.beta.threads.retrieve(threadId);
+      } catch (err) {
+        if (err.status === 404) {
+          console.log("Thread is invalid/deleted, creating a new one...");
+          threadId = await createThread();
+          await userModel.updateOne({ clerkUserId: user }, { threadId });
+        }
       }
-    } catch (error) {
-      console.log('error in getThreadId', error?.message || error);
-      return false;
+    } else {
+      threadId = await createThread();
+      await userModel.updateOne({ clerkUserId: user }, { threadId });
     }
-  };
+    return {
+      name: findUser.name,
+      threadId,
+      userId: findUser._id,
+    };
+  } catch (error) {
+    console.log('error in getThreadId', error?.message || error);
+    return false;
+  }
+};
 
 
 
+  const retrieveAssistant = async(assistantId) => {
+    try {
+      const status = await aiModel.beta.assistants.retrieve(assistantId);
+      console.log({status})
+      return status;
+    } catch (error) {
+      console.error("Error retrieving assistant:", error.response?.data || error.message || error);
+      throw new Error(error?.message || error);
+    }
+  }
+  
   
 
 const httpServer = createServer((req, res) => {
@@ -140,13 +144,21 @@ io.on('connection', async (socket) => {
   
       const thread = socket.threadId;
       const userId = socket.currentUserId;
-      
+     
+      const assistantStatus = await retrieveAssistant(process.env.ASSISTANT_ID);
+      console.log('assistantStatus:',assistantStatus)
       // check the thread status  
-      const activeRuns = await aiModel.beta.threads.runs.list(thread);
+      try {
+        const activeRuns = await aiModel.beta.threads.runs.list(thread);
       const runInProgress = activeRuns.data.find(run => {
           return ['in_progress', 'queued', 'requires_action'].includes(run.status)
+      })
+
+      } catch (error) {
+        console.log('Error checking thread status:',error)
+        
       }
-      );
+      
       try {
         if (runInProgress) {
           await aiModel.beta.threads.runs.cancel(thread, runInProgress.id);
