@@ -148,16 +148,11 @@ io.on('connection', async (socket) => {
       const assistantStatus = await retrieveAssistant(process.env.ASSISTANT_ID);
       console.log('assistantStatus:',assistantStatus)
       // check the thread status  
-      try {
+      
         const activeRuns = await aiModel.beta.threads.runs.list(thread);
       const runInProgress = activeRuns.data.find(run => {
-          return ['in_progress', 'queued', 'requires_action'].includes(run.status)
+         return ['in_progress', 'queued', 'requires_action'].includes(run.status)
       })
-
-      } catch (error) {
-        console.log('Error checking thread status:',error)
-        
-      }
       
       try {
         if (runInProgress) {
@@ -179,11 +174,11 @@ io.on('connection', async (socket) => {
       //   file: fs.createReadStream('./product.txt'),
       //   purpose: 'assistants',
       // })
-  
+      console.log({userss:socket.currentUser})
       await aiModel.beta.threads.messages.create(thread, {
         role: 'assistant',
         content: `You are a helpful AI assistant this Project which is name of **SkillSynx Ai**. 
-          - ${socket.currentUser ? 'The current user is ' + socket.currentUser + '.' : ''} 
+          - ${socket.currentUser ? 'The current user is ' +socket['currentUser'].replace(/(false|null|0|undefined|N)/g,"") + '.' : ''} 
           - You are not code generator. 
           - You must be mentioned of username in initial first message.
           - Mention the user's name no more than twice in a same thread.`
