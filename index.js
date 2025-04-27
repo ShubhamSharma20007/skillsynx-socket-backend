@@ -174,7 +174,6 @@ io.on('connection', async (socket) => {
       //   file: fs.createReadStream('./product.txt'),
       //   purpose: 'assistants',
       // })
-      console.log({userss:socket.currentUser})
       await aiModel.beta.threads.messages.create(thread, {
         role: 'assistant',
         content: `You are a helpful AI assistant this Project which is name of **SkillSynx Ai**. 
