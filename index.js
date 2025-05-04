@@ -128,52 +128,79 @@ const io = new Server(httpServer, {
 io.on('connection', async (socket) => {
   console.log('Client connected:', socket.id);
 
-  socket.on('chat_message', async ({ msg, user }) => {
-    try {
-      const userDets = await getThreadId(user);
-      console.log('userDets', userDets);
-  
-      if (!userDets) {
-        socket.emit('error', { message: 'Failed to retrieve user details' });
-        return;
-      }
-  
-      socket.threadId = userDets.threadId;
-      socket.currentUser = userDets.name;
-      socket.currentUserId = userDets.userId;
-  
-      const thread = socket.threadId;
-      const userId = socket.currentUserId;
-     
-      const assistantStatus = await retrieveAssistant(process.env.ASSISTANT_ID);
-      console.log('assistantStatus:',assistantStatus)
-      // check the thread status  
-      
-        const activeRuns = await aiModel.beta.threads.runs.list(thread);
-      const runInProgress = activeRuns.data.find(run => {
-         return ['in_progress', 'queued', 'requires_action'].includes(run.status)
-      })
-      
-      try {
-        if (runInProgress) {
-          await aiModel.beta.threads.runs.cancel(thread, runInProgress.id);
-          await new Promise(resolve => setTimeout(resolve, 1000));
-      }
-      } catch (error) {
-       console.error("Error cancelling run:", error); 
-      }
+ // Fix for the chat_message event handler
+socket.on('chat_message', async ({ msg, user }) => {
+  try {
+    const userDets = await getThreadId(user);
+    console.log('userDets', userDets);
 
-      if (!thread) {
-        socket.emit('error', { message: 'Thread ID not found' });
-        return;
+    if (!userDets) {
+      socket.emit('error', { message: 'Failed to retrieve user details' });
+      return;
+    }
+
+    socket.threadId = userDets.threadId;
+    socket.currentUser = userDets.name;
+    socket.currentUserId = userDets.userId;
+
+    const thread = socket.threadId;
+    const userId = socket.currentUserId;
+   
+    const assistantStatus = await retrieveAssistant(process.env.ASSISTANT_ID);
+
+    // Properly handle active runs before creating a new one
+    try {
+      const activeRuns = await aiModel.beta.threads.runs .list(thread);
+      console.log('Checking for active runs...');
+      
+      // Find any runs that are still active
+      const runInProgress = activeRuns.data.find(run => 
+        ['in_progress', 'queued', 'requires_action', 'cancelling'].includes(run.status)
+      );
+      
+      if (runInProgress) {
+        console.log(`Found active run: ${runInProgress.id} with status: ${runInProgress.status}`);
+        
+        try {
+          await aiModel.beta.threads.runs.cancel(thread, runInProgress.id);
+          console.log(`Cancelled run: ${runInProgress.id}`);
+          
+
+          let runStatus = runInProgress.status;
+          let attempts = 0;
+          const maxAttempts = 5;
+          
+          while (runStatus !== 'cancelled' && attempts < maxAttempts) {
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            const updatedRun = await aiModel.beta.threads.runs.retrieve(thread, runInProgress.id);
+            runStatus = updatedRun.status;
+            console.log(`Run ${runInProgress.id} status: ${runStatus}`);
+            attempts++;
+          }
+          
+          if (runStatus !== 'cancelled' && runStatus !== 'completed' && runStatus !== 'expired') {
+            console.log(`Unable to cancel run ${runInProgress.id}. Current status: ${runStatus}`);
+            socket.emit('error', { message: 'The system is currently processing another request. Please try again in a moment.' });
+            return;
+          }
+        } catch (cancelError) {
+          console.error("Error cancelling run:", cancelError);
+          socket.emit('error', { message: 'The system is busy. Please try again in a moment.' });
+          return;
+        }
       }
-  
-      await storeChats({ role: 'user', content: msg, userId });
-  
-      // const file = await aiModel.files.create({
-      //   file: fs.createReadStream('./product.txt'),
-      //   purpose: 'assistants',
-      // })
+    } catch (runsError) {
+      console.error("Error checking active runs:", runsError);
+    }
+
+    if (!thread) {
+      socket.emit('error', { message: 'Thread ID not found' });
+      return;
+    }
+
+    // Now proceed with creating messages and starting a new run
+    try {
+      // Add the system message
       await aiModel.beta.threads.messages.create(thread, {
         role: 'assistant',
         content: `You are a helpful AI assistant this Project which is name of **SkillSynx Ai**. 
@@ -182,16 +209,22 @@ io.on('connection', async (socket) => {
           - You must be mentioned of username in initial first message.
           - Mention the user's name no more than twice in a same thread.`
       });
-  
-      // Send user message to assistant
+      
+      // Add the user message
       await aiModel.beta.threads.messages.create(thread, {
         role: 'user',
         content: msg,
       });
-  
-      let fullResponse = '';
+    } catch (messageError) {
+      console.error("Error creating messages:", messageError);
+      socket.emit('error', { message: 'Error sending your message. Please try again.' });
+      return;
+    }
 
-      
+    let fullResponse = '';
+
+    // Stream the response
+    try {
       const stream = await aiModel.beta.threads.runs.stream(thread, {
         assistant_id: process.env.ASSISTANT_ID,
         stream: true,
@@ -200,7 +233,7 @@ io.on('connection', async (socket) => {
             type:'function',
             function:{
               name: 'get_file_data',
-              description: 'get the information of  skillsynx project',
+              description: 'get the information of skillsynx project',
               parameters:{
                 type:'object',
                 properties:{
@@ -212,7 +245,6 @@ io.on('connection', async (socket) => {
                       file_type:'text/plain',
                       file_location:fs.readFileSync('./project.txt','utf8'),
                     },
-                    
                 },
                 required:['input']
               }
@@ -221,8 +253,6 @@ io.on('connection', async (socket) => {
         ]
       });
 
-   
-     
       stream.on('textDelta', (textDelta) => {
         if (textDelta.value) {
           fullResponse += textDelta.value;
@@ -234,52 +264,53 @@ io.on('connection', async (socket) => {
         }
       });
 
-  
       stream.on('toolCallDone', async () => {
         io.to(socket.id).emit('stream_complete', {
           content: fullResponse,
           role: 'assistant'
         });
       });
-  
+
       stream.on('end', async () => {
         io.to(socket.id).emit('stream_complete', {
           content: fullResponse,
           role: 'assistant',
           stream: false,
         });
+        await storeChats({ role: 'user', content: msg, userId });
         await storeChats({ role: 'assistant', content: fullResponse, userId });
       });
-  
+
       stream.on('error', (error) => {
         console.error("Stream error:", error);
         socket.emit('error', {
           message: 'An error occurred with the AI response'
         });
       });
-   
-      for await(const event  of stream){
+ 
+      for await(const event of stream) {
         console.log("Event:", event);
-        console.log("--------------------- Function Call ---------------------")
         if(event.event === 'thread.run.requires_action'){
+          console.log("--------------------- Function Call ---------------------");
           io.to(socket.id).emit('chat_response', {
             content: fullResponse,
             role: 'assistant',
             stream: true,
           });
-        await handleRequiresAction(event.data,event.data.id,event.data.thread_id,socket, io, socket.currentUserId) 
-        
-        
+          await handleRequiresAction(event.data, event.data.id, event.data.thread_id, socket, io, socket.currentUserId);
         }
       }
-  
-    } catch (error) {
-      console.error("Error processing message:", error);
-      socket.emit('error', {
-        message: 'Server error processing your message'
-      });
+    } catch (streamError) {
+      console.error("Error streaming response:", streamError);
+      socket.emit('error', { message: 'Error getting AI response. Please try again.' });
     }
-  });
+  } catch (error) {
+    console.error("Error processing message:", error);
+    socket.emit('error', {
+      message: 'Server error processing your message'
+    });
+  }
+});
   
 
   socket.on('disconnect', () => {
