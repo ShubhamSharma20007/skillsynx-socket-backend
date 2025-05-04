@@ -148,7 +148,7 @@ socket.on('chat_message', async ({ msg, user }) => {
    
     const assistantStatus = await retrieveAssistant(process.env.ASSISTANT_ID);
 
-    // Properly handle active runs before creating a new one
+  
     try {
       const activeRuns = await aiModel.beta.threads.runs .list(thread);
       console.log('Checking for active runs...');
@@ -198,9 +198,8 @@ socket.on('chat_message', async ({ msg, user }) => {
       return;
     }
 
-    // Now proceed with creating messages and starting a new run
     try {
-      // Add the system message
+
       await aiModel.beta.threads.messages.create(thread, {
         role: 'assistant',
         content: `You are a helpful AI assistant this Project which is name of **SkillSynx Ai**. 
@@ -223,7 +222,6 @@ socket.on('chat_message', async ({ msg, user }) => {
 
     let fullResponse = '';
 
-    // Stream the response
     try {
       const stream = await aiModel.beta.threads.runs.stream(thread, {
         assistant_id: process.env.ASSISTANT_ID,
