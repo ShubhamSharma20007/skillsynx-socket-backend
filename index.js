@@ -149,49 +149,57 @@ socket.on('chat_message', async ({ msg, user }) => {
     const assistantStatus = await retrieveAssistant(process.env.ASSISTANT_ID);
 
   
-    try {
-      const activeRuns = await aiModel.beta.threads.runs .list(thread);
-      console.log('Checking for active runs...');
-      
-      // Find any runs that are still active
-      const runInProgress = activeRuns.data.find(run => 
-        ['in_progress', 'queued', 'requires_action', 'cancelling'].includes(run.status)
-      );
-      
-      if (runInProgress) {
-        console.log(`Found active run: ${runInProgress.id} with status: ${runInProgress.status}`);
-        
-        try {
-          await aiModel.beta.threads.runs.cancel(thread, runInProgress.id);
-          console.log(`Cancelled run: ${runInProgress.id}`);
-          
+   
+try {
+  const activeRuns = await aiModel.beta.threads.runs.list(thread);
+  console.log('Checking for active runs...');
 
-          let runStatus = runInProgress.status;
-          let attempts = 0;
-          const maxAttempts = 5;
-          
-          while (runStatus !== 'cancelled' && attempts < maxAttempts) {
-            await new Promise(resolve => setTimeout(resolve, 1000));
-            const updatedRun = await aiModel.beta.threads.runs.retrieve(thread, runInProgress.id);
-            runStatus = updatedRun.status;
-            console.log(`Run ${runInProgress.id} status: ${runStatus}`);
-            attempts++;
-          }
-          
-          if (runStatus !== 'cancelled' && runStatus !== 'completed' && runStatus !== 'expired') {
-            console.log(`Unable to cancel run ${runInProgress.id}. Current status: ${runStatus}`);
-            socket.emit('error', { message: 'The system is currently processing another request. Please try again in a moment.' });
-            return;
-          }
-        } catch (cancelError) {
-          console.error("Error cancelling run:", cancelError);
-          socket.emit('error', { message: 'The system is busy. Please try again in a moment.' });
-          return;
-        }
+  const runInProgress = activeRuns.data.find(run => 
+    ['in_progress', 'queued', 'requires_action', 'cancelling'].includes(run.status)
+  );
+  
+  if (runInProgress) {
+    console.log(`Found active run: ${runInProgress.id} with status: ${runInProgress.status}`);
+    
+    if (runInProgress.status !== 'cancelling') {
+      try {
+        await aiModel.beta.threads.runs.cancel(thread, runInProgress.id);
+        console.log(`Cancelled run: ${runInProgress.id}`);
+      } catch (cancelError) {
+        console.error("Error cancelling run:", cancelError);
       }
-    } catch (runsError) {
-      console.error("Error checking active runs:", runsError);
+    } else {
+      console.log(`Run ${runInProgress.id} is already in 'cancelling' status`);
     }
+
+  
+    let runStatus = runInProgress.status;
+    let attempts = 0;
+    const maxAttempts = 10;
+    
+    while (['in_progress', 'queued', 'requires_action', 'cancelling'].includes(runStatus) && attempts < maxAttempts) {
+      await new Promise(resolve => setTimeout(resolve, 1500)); 
+      try {
+        const updatedRun = await aiModel.beta.threads.runs.retrieve(thread, runInProgress.id);
+        runStatus = updatedRun.status;
+        console.log(`Run ${runInProgress.id} status: ${runStatus}`);
+      } catch (retrieveError) {
+        console.error("Error retrieving run status:", retrieveError);
+        break;
+      }
+      attempts++;
+    }
+    
+    if (['in_progress', 'queued', 'requires_action', 'cancelling'].includes(runStatus)) {
+      console.log(`Unable to wait for run ${runInProgress.id} to complete. Current status: ${runStatus}`);
+      socket.emit('error', { message: 'The system is currently processing another request. Please try again in a moment.' });
+      return;
+    }
+  }
+} catch (runsError) {
+  console.error("Error checking active runs:", runsError);
+}
+
 
     if (!thread) {
       socket.emit('error', { message: 'Thread ID not found' });
@@ -203,7 +211,7 @@ socket.on('chat_message', async ({ msg, user }) => {
       await aiModel.beta.threads.messages.create(thread, {
         role: 'assistant',
         content: `You are a helpful AI assistant this Project which is name of **SkillSynx Ai**. 
-          - ${socket.currentUser ? 'The current user is ' +socket['currentUser'].replace(/(false|null|0|undefined|N)/g,"") + '.' : ''} 
+          - ${socket.currentUser ? 'The current user is ' +socket['currentUser'].replace(/(false|null|0|undefined|NaN)/g,"") + '.' : ''} 
           - You are not code generator. 
           - You must be mentioned of username in initial first message.
           - Mention the user's name no more than twice in a same thread.`
